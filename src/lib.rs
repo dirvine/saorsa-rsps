@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
 pub mod cache;
+pub mod crypto;
 pub mod gcs;
 pub mod ttl;
 pub mod witness;

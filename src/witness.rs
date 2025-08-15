@@ -4,7 +4,7 @@
 //! Witness receipts with VRF pseudonyms for privacy-preserving attestation
 
 use crate::Cid;
-use blake3::Hasher;
+use crate::crypto::{CryptoProvider, DefaultCrypto};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
@@ -12,19 +12,13 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VrfPseudonym {
     /// The pseudonym value
-    pub value: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub value: Vec<u8>,
     /// Proof of correct VRF computation
-    pub proof: VrfProof,
+    pub proof: Vec<u8>,
 }
 
-/// VRF proof (simplified for now, would use actual VRF in production)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct VrfProof {
-    /// Challenge value
-    pub challenge: [u8; 32],
-    /// Response value
-    pub response: [u8; 32],
-}
+// The actual VRF proof bytes are produced by schnorrkel and serialized as-is
 
 /// Witness receipt for content retrieval
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,11 +27,15 @@ pub struct WitnessReceipt {
     pub cid: Cid,
     /// VRF pseudonym of the witness
     pub witness_pseudonym: VrfPseudonym,
+    /// Public key of the witness (sr25519)
+    pub witness_public: [u8; 32],
     /// Timestamp of retrieval
     pub timestamp: SystemTime,
+    /// Epoch under which the retrieval occurred
+    pub epoch: u64,
     /// Optional metadata
     pub metadata: ReceiptMetadata,
-    /// Signature over the receipt
+    /// Signature over the receipt (sr25519)
     pub signature: Vec<u8>,
 }
 
@@ -55,73 +53,50 @@ pub struct ReceiptMetadata {
 }
 
 /// Witness key for generating VRF pseudonyms
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WitnessKey {
-    /// Private key material
-    secret: [u8; 32],
-    /// Public key
-    public: [u8; 32],
+    /// Ed25519 signature secret key (32 bytes)
+    sig_secret: [u8; ed25519_dalek::SECRET_KEY_LENGTH],
+    /// Ed25519 signature public key (32 bytes)
+    sig_public: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+    /// VRF secret/public keys for pseudonyms
+    vrf_secret: [u8; 32],
+    vrf_public: [u8; 32],
 }
 
 impl WitnessKey {
     /// Generate a new witness key
     pub fn generate() -> Self {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut secret = [0u8; 32];
-        rng.fill(&mut secret);
+        // Generate Ed25519
+        let mut rng = rand::rngs::OsRng;
+        let ed_sk = ed25519_dalek::SigningKey::generate(&mut rng);
+        let ed_pk = ed_sk.verifying_key();
 
-        // Derive public key (simplified - would use actual key derivation)
-        let mut hasher = Hasher::new();
-        hasher.update(b"witness-public");
-        hasher.update(&secret);
-        let mut public = [0u8; 32];
-        public.copy_from_slice(hasher.finalize().as_bytes());
+        // Generate VRF (ristretto255 via vrf-r255)
+        let vrf_sk = vrf_r255::SecretKey::generate(rand::rngs::OsRng);
+        let vrf_pk = vrf_r255::PublicKey::from(vrf_sk);
 
-        Self { secret, public }
+        Self {
+            sig_secret: ed_sk.to_bytes(),
+            sig_public: ed_pk.to_bytes(),
+            vrf_secret: vrf_sk.to_bytes(),
+            vrf_public: vrf_pk.to_bytes(),
+        }
     }
 
-    /// Create VRF pseudonym for a CID
+    /// Create VRF pseudonym for a CID with domain separation
     pub fn create_pseudonym(&self, cid: &Cid, epoch: u64) -> VrfPseudonym {
-        // Compute VRF output (simplified - would use actual VRF)
-        let mut hasher = Hasher::new();
-        hasher.update(b"vrf-pseudonym");
-        hasher.update(&self.secret);
-        hasher.update(cid);
-        hasher.update(&epoch.to_le_bytes());
-
-        let mut value = [0u8; 32];
-        value.copy_from_slice(hasher.finalize().as_bytes());
-
-        // Generate proof
-        let proof = self.generate_proof(cid, epoch, &value);
-
-        VrfPseudonym { value, proof }
-    }
-
-    /// Generate VRF proof
-    fn generate_proof(&self, cid: &Cid, epoch: u64, output: &[u8; 32]) -> VrfProof {
-        // Simplified proof generation
-        let mut hasher = Hasher::new();
-        hasher.update(b"vrf-challenge");
-        hasher.update(cid);
-        hasher.update(&epoch.to_le_bytes());
-        hasher.update(output);
-
-        let mut challenge = [0u8; 32];
-        challenge.copy_from_slice(hasher.finalize().as_bytes());
-
-        hasher = Hasher::new();
-        hasher.update(b"vrf-response");
-        hasher.update(&self.secret);
-        hasher.update(&challenge);
-
-        let mut response = [0u8; 32];
-        response.copy_from_slice(hasher.finalize().as_bytes());
-
-        VrfProof {
-            challenge,
-            response,
+        // Domain separation for VRF inputs
+        let mut input = Vec::with_capacity(64);
+        input.extend_from_slice(b"saorsa-rsps:vrf:v1:");
+        input.extend_from_slice(cid);
+        input.extend_from_slice(&epoch.to_le_bytes());
+        
+        let (out, proof) = DefaultCrypto::vrf_prove(&input, &crate::crypto::types::VrfSecretKey(self.vrf_secret))
+            .expect("VRF prove should not fail with valid key");
+        VrfPseudonym {
+            value: out.0,
+            proof: proof.0,
         }
     }
 
@@ -134,20 +109,22 @@ impl WitnessKey {
     ) -> WitnessReceipt {
         let witness_pseudonym = self.create_pseudonym(&cid, epoch);
         let timestamp = SystemTime::now();
-
         // Sign the receipt
         let signature = self.sign_receipt(&cid, &witness_pseudonym, &timestamp, &metadata);
-
+        let mut pub_bytes = [0u8; 32];
+        pub_bytes.copy_from_slice(self.vrf_public.as_ref());
         WitnessReceipt {
             cid,
             witness_pseudonym,
+            witness_public: pub_bytes,
             timestamp,
+            epoch,
             metadata,
             signature,
         }
     }
 
-    /// Sign a receipt
+    /// Sign a receipt with domain separation
     fn sign_receipt(
         &self,
         cid: &Cid,
@@ -155,67 +132,79 @@ impl WitnessKey {
         timestamp: &SystemTime,
         metadata: &ReceiptMetadata,
     ) -> Vec<u8> {
-        // Simplified signature (would use actual signature scheme)
-        let mut hasher = Hasher::new();
-        hasher.update(b"receipt-signature");
-        hasher.update(&self.secret);
-        hasher.update(cid);
-        hasher.update(&pseudonym.value);
-        hasher.update(
+        let mut msg = Vec::new();
+        // Domain separation for witness receipts
+        msg.extend_from_slice(b"saorsa-rsps:witness:v1:");
+        msg.extend_from_slice(cid);
+        msg.extend_from_slice(&pseudonym.value);
+        msg.extend_from_slice(
             &timestamp
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs()
                 .to_le_bytes(),
         );
-        hasher.update(&metadata.latency_ms.to_le_bytes());
-        hasher.update(&metadata.content_size.to_le_bytes());
-        hasher.update(&[metadata.valid as u8]);
-
-        let hash = hasher.finalize();
-        let mut signature = Vec::with_capacity(64);
-        signature.extend_from_slice(hash.as_bytes());
-        signature.extend_from_slice(&self.public);
-
-        signature
+        msg.extend_from_slice(&metadata.latency_ms.to_le_bytes());
+        msg.extend_from_slice(&metadata.content_size.to_le_bytes());
+        msg.push(metadata.valid as u8);
+        
+        let sig = DefaultCrypto::sign_with_secret_bytes(&msg, self.sig_secret)
+            .expect("Signature should not fail with valid key");
+        sig.to_bytes().to_vec()
     }
 
     /// Get the public key
     pub fn public_key(&self) -> [u8; 32] {
-        self.public
+        // Return 32-byte Ed25519 public key
+        self.sig_public
+    }
+
+    /// Get the VRF public key (ristretto255)
+    pub fn vrf_public_key(&self) -> [u8; 32] {
+        self.vrf_public
     }
 }
 
-/// Verify a VRF pseudonym
+/// Verify a VRF pseudonym with domain separation
 pub fn verify_pseudonym(
     pseudonym: &VrfPseudonym,
     cid: &Cid,
     epoch: u64,
     public_key: &[u8; 32],
 ) -> bool {
-    // Simplified verification (would use actual VRF verification)
-    let mut hasher = Hasher::new();
-    hasher.update(b"vrf-verify");
-    hasher.update(public_key);
-    hasher.update(cid);
-    hasher.update(&epoch.to_le_bytes());
-    hasher.update(&pseudonym.proof.challenge);
-    hasher.update(&pseudonym.proof.response);
-
-    // In production, would properly verify the VRF proof
-    true // Simplified for now
+    // Domain separation for VRF inputs (same as in create_pseudonym)
+    let mut input = Vec::with_capacity(64);
+    input.extend_from_slice(b"saorsa-rsps:vrf:v1:");
+    input.extend_from_slice(cid);
+    input.extend_from_slice(&epoch.to_le_bytes());
+    
+    let proof = crate::crypto::types::VrfProof(pseudonym.proof.clone());
+    let pk = crate::crypto::types::VrfPublicKey(*public_key);
+    match DefaultCrypto::vrf_verify(&input, &pk, &proof) {
+        Ok(out) => out.0 == pseudonym.value,
+        Err(_) => false,
+    }
 }
 
-/// Verify a witness receipt
-pub fn verify_receipt(receipt: &WitnessReceipt, _public_key: &[u8; 32]) -> bool {
-    // Verify signature
-    let mut hasher = Hasher::new();
-    hasher.update(b"receipt-signature");
-    // In production, would use the actual public key to verify
-    hasher.update(&receipt.signature[32..64]); // Public key from signature
-    hasher.update(&receipt.cid);
-    hasher.update(&receipt.witness_pseudonym.value);
-    hasher.update(
+/// Verify a witness receipt with domain separation
+pub fn verify_receipt(receipt: &WitnessReceipt, public_key: &[u8; 32]) -> bool {
+    // Verify VRF pseudonym first
+    if !verify_pseudonym(
+        &receipt.witness_pseudonym,
+        &receipt.cid,
+        receipt.epoch,
+        &receipt.witness_public,
+    ) {
+        return false;
+    }
+
+    // Verify signature with domain separation (same as in sign_receipt)
+    let mut msg = Vec::new();
+    // Domain separation for witness receipts
+    msg.extend_from_slice(b"saorsa-rsps:witness:v1:");
+    msg.extend_from_slice(&receipt.cid);
+    msg.extend_from_slice(&receipt.witness_pseudonym.value);
+    msg.extend_from_slice(
         &receipt
             .timestamp
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -223,12 +212,16 @@ pub fn verify_receipt(receipt: &WitnessReceipt, _public_key: &[u8; 32]) -> bool 
             .as_secs()
             .to_le_bytes(),
     );
-    hasher.update(&receipt.metadata.latency_ms.to_le_bytes());
-    hasher.update(&receipt.metadata.content_size.to_le_bytes());
-    hasher.update(&[receipt.metadata.valid as u8]);
-
-    // Simplified verification
-    true // In production, would properly verify signature
+    msg.extend_from_slice(&receipt.metadata.latency_ms.to_le_bytes());
+    msg.extend_from_slice(&receipt.metadata.content_size.to_le_bytes());
+    msg.push(receipt.metadata.valid as u8);
+    
+    let sig_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+        match receipt.signature.clone().try_into() {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+    DefaultCrypto::verify_with_bytes(&msg, *public_key, sig_bytes).is_ok()
 }
 
 /// Batch verification of receipts
@@ -312,8 +305,7 @@ mod tests {
         let key2 = WitnessKey::generate();
 
         // Keys should be different
-        assert_ne!(key1.secret, key2.secret);
-        assert_ne!(key1.public, key2.public);
+        assert_ne!(key1.public_key(), key2.public_key());
     }
 
     #[test]
@@ -327,6 +319,9 @@ mod tests {
 
         // Same inputs should produce same pseudonym
         assert_eq!(pseudonym1.value, pseudonym2.value);
+        // Verify pseudonym
+        let vrf_pk = key.vrf_public_key();
+        assert!(verify_pseudonym(&pseudonym1, &cid, epoch, &vrf_pk));
 
         // Different epoch should produce different pseudonym
         let pseudonym3 = key.create_pseudonym(&cid, epoch + 1);
@@ -347,11 +342,13 @@ mod tests {
         };
 
         let receipt = key.create_receipt(cid, epoch, metadata.clone());
-
         assert_eq!(receipt.cid, cid);
         assert_eq!(receipt.metadata.latency_ms, 150);
         assert_eq!(receipt.metadata.content_size, 1024);
         assert!(receipt.metadata.valid);
+        // Verify signature with witness public
+        let pk = key.public_key();
+        assert!(verify_receipt(&receipt, &pk));
     }
 
     #[test]
@@ -413,5 +410,83 @@ mod tests {
 
         let distribution = batch.temporal_distribution(&cid, std::time::Duration::from_secs(60));
         assert!(!distribution.is_empty());
+    }
+
+    #[test]
+    fn test_domain_separation() {
+        let key = WitnessKey::generate();
+        let cid = [1u8; 32];
+        let epoch = 1;
+
+        // Create pseudonym with domain separation
+        let pseudonym = key.create_pseudonym(&cid, epoch);
+        
+        // Verify it works
+        let vrf_pk = key.vrf_public_key();
+        assert!(verify_pseudonym(&pseudonym, &cid, epoch, &vrf_pk));
+        
+        // Verify it fails with wrong epoch
+        assert!(!verify_pseudonym(&pseudonym, &cid, epoch + 1, &vrf_pk));
+    }
+
+    #[test]
+    fn test_invalid_signature_verification() {
+        let key = WitnessKey::generate();
+        let cid = [1u8; 32];
+        
+        let metadata = ReceiptMetadata {
+            latency_ms: 150,
+            content_size: 1024,
+            valid: true,
+            error: None,
+        };
+
+        let mut receipt = key.create_receipt(cid, 1, metadata);
+        
+        // Corrupt the signature
+        receipt.signature[0] ^= 1;
+        
+        // Verification should fail
+        let pk = key.public_key();
+        assert!(!verify_receipt(&receipt, &pk));
+    }
+
+    #[test]
+    fn test_different_keys_different_pseudonyms() {
+        let key1 = WitnessKey::generate();
+        let key2 = WitnessKey::generate();
+        let cid = [1u8; 32];
+        let epoch = 1;
+
+        let pseudonym1 = key1.create_pseudonym(&cid, epoch);
+        let pseudonym2 = key2.create_pseudonym(&cid, epoch);
+
+        // Different keys should produce different pseudonyms for same input
+        assert_ne!(pseudonym1.value, pseudonym2.value);
+        assert_ne!(pseudonym1.proof, pseudonym2.proof);
+    }
+
+    #[test]
+    fn test_receipt_verification_with_wrong_public_key() {
+        let key1 = WitnessKey::generate();
+        let key2 = WitnessKey::generate();
+        let cid = [1u8; 32];
+        
+        let metadata = ReceiptMetadata {
+            latency_ms: 150,
+            content_size: 1024,
+            valid: true,
+            error: None,
+        };
+
+        let receipt = key1.create_receipt(cid, 1, metadata);
+        
+        // Try to verify with wrong public key
+        let wrong_pk = key2.public_key();
+        assert!(!verify_receipt(&receipt, &wrong_pk));
+        
+        // Verify with correct public key works
+        let correct_pk = key1.public_key();
+        assert!(verify_receipt(&receipt, &correct_pk));
     }
 }

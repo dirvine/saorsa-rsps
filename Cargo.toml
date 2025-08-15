@@ -46,6 +46,14 @@ dashmap = "6.0"
 # Random
 rand = "0.8"
 
+# Crypto (signatures and VRF)
+ed25519-dalek = { version = "2", features = ["rand_core", "serde", "zeroize"] }
+ed25519 = "2"
+vrf-r255 = "0.1"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+serde_bytes = "0.11"
+schnorrkel = "0.10"
+
 [dev-dependencies]
 proptest = "1.4"
 criterion = { version = "0.5", features = ["html_reports"] }

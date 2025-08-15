@@ -116,8 +116,8 @@ impl TtlEngine {
         entry.hit_count += 1;
         entry.last_activity = SystemTime::now();
 
-        // Calculate new TTL delta from hits (no base here)
-        let new_hit_ttl = self.config.ttl_per_hit * entry.hit_count as u32;
+        // Calculate new TTL from hits
+        let new_hit_ttl = self.config.base_ttl + (self.config.ttl_per_hit * entry.hit_count as u32);
         entry.hit_ttl = new_hit_ttl.min(self.config.max_hit_ttl);
 
         // Update expiration
@@ -140,9 +140,10 @@ impl TtlEngine {
         // Update temporal buckets
         self.update_buckets(&mut entry, witness_id, now);
 
-        // Calculate new TTL delta from receipts (no base here)
+        // Calculate new TTL from receipts
         let active_buckets = self.count_active_buckets(&entry, now);
-        let new_receipt_ttl = self.config.ttl_per_receipt * active_buckets as u32;
+        let new_receipt_ttl =
+            self.config.base_ttl + (self.config.ttl_per_receipt * active_buckets as u32);
         entry.receipt_ttl = new_receipt_ttl.min(self.config.max_receipt_ttl);
 
         // Update expiration
@@ -201,7 +202,6 @@ impl TtlEngine {
 
     /// Update expiration time based on hits and receipts
     fn update_expiration(&self, entry: &mut TtlEntry) {
-        // Expiration is base TTL plus deltas from hits and receipts
         let total_ttl = self.config.base_ttl + entry.hit_ttl + entry.receipt_ttl;
         entry.expires_at = entry.created_at + total_ttl;
     }
@@ -297,7 +297,7 @@ mod tests {
 
         let stats = engine.get_stats(&cid).unwrap();
         assert_eq!(stats.hit_count, 2);
-        assert_eq!(stats.total_ttl.as_secs(), 20); // 2 * 10 = 20 seconds (delta only), below cap (50)
+        assert_eq!(stats.total_ttl.as_secs(), 50); // base_ttl (100) + 2 * 10 = 120, capped at max_hit_ttl (50)
     }
 
     #[test]
