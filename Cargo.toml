@@ -1,6 +1,6 @@
 [package]
 name = "saorsa-rsps"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Saorsa Labs Limited <saorsalabs@gmail.com>"]
 license = "AGPL-3.0"
@@ -62,7 +62,6 @@ ed25519 = "2"
 vrf-r255 = "0.1"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 serde_bytes = "0.11"
-schnorrkel = "0.10"
 
 [dev-dependencies]
 proptest = "1.4"

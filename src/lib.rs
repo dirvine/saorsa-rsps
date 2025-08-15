@@ -1,6 +1,8 @@
 // Copyright 2024 Saorsa Labs
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! # DHT RSPS - Root-Scoped Provider Summaries
 //!
 //! This crate implements Root-Scoped Provider Summaries using Golomb Coded Sets (GCS)
@@ -44,8 +46,17 @@ pub enum RspsError {
     #[error("Invalid witness receipt: {0}")]
     InvalidWitness(String),
 
+    #[error("Cryptographic operation failed: {0}")]
+    CryptoError(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<crate::crypto::CryptoError> for RspsError {
+    fn from(err: crate::crypto::CryptoError) -> Self {
+        RspsError::CryptoError(err.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, RspsError>;

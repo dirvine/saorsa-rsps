@@ -48,10 +48,18 @@ impl GolombCodedSet {
         bytes
     }
 
-    /// Deserialize from bytes
+    /// Deserialize from bytes with comprehensive validation
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        // Basic length validation
         if bytes.len() < 48 {
             return Err(RspsError::InvalidParameters("GCS data too short".into()));
+        }
+
+        // Maximum reasonable size to prevent DoS (100MB max)
+        if bytes.len() > 100 * 1024 * 1024 {
+            return Err(RspsError::InvalidParameters(
+                "GCS data too large (>100MB)".into(),
+            ));
         }
 
         let mut n_bytes = [0u8; 8];
@@ -64,12 +72,60 @@ impl GolombCodedSet {
 
         let n = u64::from_le_bytes(n_bytes);
         let p = u64::from_le_bytes(p_bytes);
+
+        // Validate parameters
         if p == 0 || !p.is_power_of_two() {
             return Err(RspsError::InvalidParameters(
                 "GCS parameter p must be a power of two (Rice coding) and >= 1".into(),
             ));
         }
+
+        // Prevent DoS: limit n to reasonable values (max 10M items)
+        if n > 10_000_000 {
+            return Err(RspsError::InvalidParameters(
+                "GCS n parameter too large (>10M items)".into(),
+            ));
+        }
+
+        // Validate p is within reasonable bounds (max 2^40 to prevent overflow)
+        if p > (1u64 << 40) {
+            return Err(RspsError::InvalidParameters(
+                "GCS parameter p too large (>2^40)".into(),
+            ));
+        }
+
         let data = bytes[48..].to_vec();
+
+        // Validate data length is reasonable for the given n and p
+        if n > 0 {
+            let remainder_bits = p.trailing_zeros() as usize;
+            // Each item needs at least 1 bit (unary 0) + remainder_bits
+            let min_bits_per_item = 1 + remainder_bits;
+            let min_total_bits = n.saturating_mul(min_bits_per_item as u64);
+            let min_bytes = min_total_bits.div_ceil(8); // Round up to bytes
+
+            if data.len() < min_bytes as usize {
+                return Err(RspsError::InvalidParameters(
+                    "GCS data too small for declared item count".into(),
+                ));
+            }
+
+            // Also check maximum reasonable size based on worst case encoding
+            // Worst case: each delta requires log2(n*p) bits plus overhead
+            let max_bits_per_item = 64 + remainder_bits; // Conservative upper bound
+            let max_total_bits = n.saturating_mul(max_bits_per_item as u64);
+            let max_bytes = max_total_bits.div_ceil(8);
+
+            if data.len() > max_bytes.saturating_mul(2) as usize {
+                return Err(RspsError::InvalidParameters(
+                    "GCS data suspiciously large for declared parameters".into(),
+                ));
+            }
+        } else if !data.is_empty() {
+            return Err(RspsError::InvalidParameters(
+                "GCS with n=0 must have empty data".into(),
+            ));
+        }
 
         Ok(Self { n, p, data, salt })
     }
@@ -110,6 +166,10 @@ impl GolombCodedSet {
                 idx += 1;
                 if bit {
                     q += 1;
+                    // Prevent DoS: limit quotient to reasonable values
+                    if q > 1000000 {
+                        return false; // Malformed data
+                    }
                 } else {
                     break;
                 }
@@ -120,7 +180,7 @@ impl GolombCodedSet {
 
             // Read fixed-size remainder
             let mut r: u64 = 0;
-            if remainder_bits > 0 {
+            if remainder_bits > 0 && remainder_bits <= 64 {
                 // Big-endian bit order for remainder as encoded
                 for _ in 0..remainder_bits {
                     if idx >= bits.len() {
@@ -131,8 +191,17 @@ impl GolombCodedSet {
                 }
             }
 
-            let delta = q * self.p + r;
-            let value = prev + delta;
+            // Prevent integer overflow in delta calculation
+            let delta = q.saturating_mul(self.p).saturating_add(r);
+            
+            // Prevent integer overflow in value calculation
+            let value = prev.saturating_add(delta);
+            
+            // Detect overflow/wraparound which indicates malformed data
+            if value < prev {
+                return false; // Overflow detected
+            }
+            
             prev = value;
             decoded_count += 1;
 
@@ -424,5 +493,43 @@ mod tests {
         let rate = false_positives as f64 / trials as f64;
         // Allow some wiggle room: rate should be below 8x the target for stability
         assert!(rate <= f64::max(0.08, fpr * 8.0), "rate {} too high", rate);
+    }
+
+    #[test]
+    fn test_input_validation_rejects_malformed_data() {
+        // Test data too large
+        let large_data = vec![0u8; 101 * 1024 * 1024]; // 101MB
+        assert!(GolombCodedSet::from_bytes(&large_data).is_err());
+
+        // Test n too large
+        let n: u64 = 20_000_000; // > 10M limit
+        let p: u64 = 4;
+        let salt = [0u8; 32];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&n.to_le_bytes());
+        bytes.extend_from_slice(&p.to_le_bytes());
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&[0u8; 100]);
+        assert!(GolombCodedSet::from_bytes(&bytes).is_err());
+
+        // Test p too large
+        let n: u64 = 10;
+        let p: u64 = 1u64 << 50; // > 2^40 limit
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&n.to_le_bytes());
+        bytes.extend_from_slice(&p.to_le_bytes());
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&[0u8; 100]);
+        assert!(GolombCodedSet::from_bytes(&bytes).is_err());
+
+        // Test n=0 with non-empty data
+        let n: u64 = 0;
+        let p: u64 = 4;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&n.to_le_bytes());
+        bytes.extend_from_slice(&p.to_le_bytes());
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&[1u8; 10]); // Non-empty data
+        assert!(GolombCodedSet::from_bytes(&bytes).is_err());
     }
 }
