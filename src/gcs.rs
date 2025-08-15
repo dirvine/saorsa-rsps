@@ -64,6 +64,11 @@ impl GolombCodedSet {
 
         let n = u64::from_le_bytes(n_bytes);
         let p = u64::from_le_bytes(p_bytes);
+        if p == 0 || !p.is_power_of_two() {
+            return Err(RspsError::InvalidParameters(
+                "GCS parameter p must be a power of two (Rice coding) and >= 1".into(),
+            ));
+        }
         let data = bytes[48..].to_vec();
 
         Ok(Self { n, p, data, salt })
@@ -89,11 +94,8 @@ impl GolombCodedSet {
             return false;
         }
 
-        // Number of bits used to represent the remainder
-        let remainder_bits = (self.p as f64).log2().ceil() as usize;
-        if remainder_bits == 0 {
-            // p == 1, so remainder is always 0 and quotient fully determines delta
-        }
+        // Number of bits used to represent the remainder (Rice coding requires p to be a power of two)
+        let remainder_bits = self.p.trailing_zeros() as usize;
 
         let bits = BitSlice::<u8, Msb0>::from_slice(&self.data);
         let mut idx = 0usize;
@@ -187,9 +189,17 @@ impl GcsBuilder {
             });
         }
 
-        // Calculate P parameter from target FPR
-        // P = ceil(1 / fpr)
-        let p = (1.0 / self.target_fpr).ceil() as u64;
+        // Enforce Golomb-Rice coding by choosing p as a power of two.
+        // k = ceil(log2(1/fpr)), p = 2^k
+        if !(self.target_fpr.is_finite() && self.target_fpr > 0.0 && self.target_fpr < 1.0) {
+            return Err(RspsError::InvalidParameters(
+                "target_fpr must be in the open interval (0, 1)".into(),
+            ));
+        }
+        let inv = 1.0 / self.target_fpr;
+        let k = inv.log2().ceil().max(0.0) as u32;
+        let k = k.min(60);
+        let p: u64 = 1u64 << k;
 
         let salt = self.salt.unwrap_or_else(|| {
             // Generate random salt if not provided
@@ -206,7 +216,7 @@ impl GcsBuilder {
             .collect();
         hashes.sort_unstable();
 
-        // Encode using Golomb coding
+        // Encode using Golomb-Rice coding
         let data = self.golomb_encode(&hashes, p)?;
 
         Ok(GolombCodedSet { n, p, data, salt })
@@ -225,8 +235,13 @@ impl GcsBuilder {
         u64::from_le_bytes(bytes)
     }
 
-    /// Golomb encode a sorted list of integers
+    /// Golomb-Rice encode a sorted list of integers
     fn golomb_encode(&self, values: &[u64], p: u64) -> Result<Vec<u8>> {
+        if p == 0 || !p.is_power_of_two() {
+            return Err(RspsError::InvalidParameters(
+                "encoding requires p to be a power of two (Rice coding)".into(),
+            ));
+        }
         let mut bits = BitVec::<u8, Msb0>::new();
         let mut prev = 0u64;
 
@@ -244,8 +259,8 @@ impl GcsBuilder {
             }
             bits.push(false);
 
-            // Write remainder in binary (log2(p) bits)
-            let remainder_bits = (p as f64).log2().ceil() as usize;
+            // Write remainder in binary where k = log2(p)
+            let remainder_bits = p.trailing_zeros() as usize;
             for i in (0..remainder_bits).rev() {
                 bits.push((remainder >> i) & 1 == 1);
             }

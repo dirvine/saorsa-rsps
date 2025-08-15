@@ -26,7 +26,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
-        run: cargo test --all --locked --verbose
+        run: cargo test --all --verbose
 
       - name: Audit
         if: github.event_name == 'pull_request'
