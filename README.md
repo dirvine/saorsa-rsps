@@ -117,6 +117,16 @@ This crate is designed for use in DHT-based or gossip-based networks where provi
   - Lower FPR → larger RSPS, more CPU to encode/decode, less cache pollution.
   - Higher FPR → smaller RSPS, faster, but occasional extra fetches.
 
+### Why Golomb–Rice coding?
+
+Golomb coding represents non-negative integers as a quotient (unary-coded) and a remainder (binary-coded) with respect to a parameter `p`. When `p` is a power of two (`p = 2^k`), the scheme is called Golomb–Rice coding. We choose Rice coding for RSPS because:
+
+- Simpler and faster decode: the remainder is exactly `k = log2(p)` bits; no truncated-binary logic is needed, which keeps parsing branch-light and cache-friendly.
+- Deterministic footprint vs. FPR: we pick `k = ceil(log2(1 / target_fpr))` so the parameter ties directly to the requested false-positive rate.
+- Good practical compression for hashed, near-uniform deltas: the sorted hashed values modulo `n * p` produce geometric-like deltas that Rice handles efficiently.
+
+In this crate, we enforce Rice coding by deriving `p` as a power of two and validating `p` during decode. This provides predictable encode/decode behavior and avoids edge cases that arise with general Golomb parameters.
+
 ### Serialization and transport
 
 - `GolombCodedSet::to_bytes`/`from_bytes` serialize the GCS; an RSPS can be reconstructed from its components across nodes.

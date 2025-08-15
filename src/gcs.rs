@@ -297,6 +297,7 @@ mod tests {
 
         assert_eq!(gcs.n, 3);
         assert!(gcs.p > 0);
+        assert!(gcs.p.is_power_of_two());
         assert!(!gcs.data.is_empty());
     }
 
@@ -342,5 +343,86 @@ mod tests {
         for item in &items {
             assert!(gcs.contains(item));
         }
+    }
+
+    #[test]
+    fn test_rice_parameter_is_power_of_two_and_matches_fpr() {
+        let items = (0..16).map(|i| [i as u8; 32]).collect::<Vec<_>>();
+        let fpr = 0.01; // 1%
+        let gcs = GcsBuilder::new().target_fpr(fpr).build(&items).unwrap();
+
+        assert!(gcs.p.is_power_of_two(), "p must be power of two");
+        let expected_k = (1.0 / fpr).log2().ceil().max(0.0) as u32;
+        let expected_p = 1u64 << expected_k.min(60);
+        assert_eq!(gcs.p, expected_p);
+    }
+
+    #[test]
+    fn test_from_bytes_rejects_non_power_of_two_p() {
+        // Build a minimal, but invalid, byte stream with p = 3 (not power of two)
+        let n: u64 = 1;
+        let p: u64 = 3;
+        let salt = [0u8; 32];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&n.to_le_bytes());
+        bytes.extend_from_slice(&p.to_le_bytes());
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&[0u8; 1]); // some data
+
+        let err = GolombCodedSet::from_bytes(&bytes).unwrap_err();
+        match err {
+            RspsError::InvalidParameters(msg) => {
+                assert!(msg.contains("power of two"));
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_builder_rejects_invalid_fpr() {
+        let items = vec![[1u8; 32]];
+        // fpr <= 0
+        assert!(GcsBuilder::new().target_fpr(0.0).build(&items).is_err());
+        assert!(GcsBuilder::new().target_fpr(-0.1).build(&items).is_err());
+        // fpr >= 1
+        assert!(GcsBuilder::new().target_fpr(1.0).build(&items).is_err());
+        assert!(GcsBuilder::new().target_fpr(2.0).build(&items).is_err());
+    }
+
+    #[test]
+    fn test_serialization_roundtrip_preserves_membership() {
+        let items = (0..64).map(|i| [i as u8; 32]).collect::<Vec<_>>();
+        let gcs = GcsBuilder::new().target_fpr(0.02).build(&items).unwrap();
+
+        let bytes = gcs.to_bytes();
+        let restored = GolombCodedSet::from_bytes(&bytes).unwrap();
+
+        for item in &items {
+            assert!(restored.contains(item));
+        }
+    }
+
+    #[test]
+    fn test_false_positive_rate_reasonable_bound() {
+        use rand::RngCore;
+
+        let items = (0..256).map(|i| [i as u8; 32]).collect::<Vec<_>>();
+        let fpr = 0.01; // 1%
+        let gcs = GcsBuilder::new().target_fpr(fpr).build(&items).unwrap();
+
+        let mut rng = rand::thread_rng();
+        let trials = 3000usize;
+        let mut non_member = [0u8; 32];
+        let mut false_positives = 0usize;
+        for _ in 0..trials {
+            rng.fill_bytes(&mut non_member);
+            if !items.contains(&non_member) && gcs.contains(&non_member) {
+                false_positives += 1;
+            }
+        }
+
+        let rate = false_positives as f64 / trials as f64;
+        // Allow some wiggle room: rate should be below 8x the target for stability
+        assert!(rate <= f64::max(0.08, fpr * 8.0), "rate {} too high", rate);
     }
 }

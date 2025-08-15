@@ -79,7 +79,8 @@ impl RootAnchoredCache {
             rsps_by_root: Arc::new(DashMap::new()),
             entries: Arc::new(DashMap::new()),
             lru: Arc::new(RwLock::new(LruCache::new(
-                std::num::NonZeroUsize::new(max_items).unwrap_or(std::num::NonZeroUsize::new(1000000).unwrap()),
+                std::num::NonZeroUsize::new(max_items)
+                    .unwrap_or(std::num::NonZeroUsize::new(1000000).unwrap()),
             ))),
             current_size: Arc::new(RwLock::new(0)),
             items_per_root: Arc::new(DashMap::new()),
@@ -168,14 +169,14 @@ impl RootAnchoredCache {
         let mut freed = 0;
         let mut lru = self.lru.write();
 
-        while freed < needed_size && lru.len() > 0 {
-            if let Some((cid, _)) = lru.pop_lru() {
-                if let Some((_, entry)) = self.entries.remove(&cid) {
-                    freed += entry.size;
-                    *self.current_size.write() -= entry.size;
-                    if let Some(mut count) = self.items_per_root.get_mut(&entry.root_cid) {
-                        *count = count.saturating_sub(1);
-                    }
+        while freed < needed_size && !lru.is_empty() {
+            if let Some((cid, _)) = lru.pop_lru()
+                && let Some((_, entry)) = self.entries.remove(&cid)
+            {
+                freed += entry.size;
+                *self.current_size.write() -= entry.size;
+                if let Some(mut count) = self.items_per_root.get_mut(&entry.root_cid) {
+                    *count = count.saturating_sub(1);
                 }
             }
         }
@@ -226,13 +227,7 @@ mod tests {
         let cid2 = [3u8; 32];
 
         // Create RSPS with CIDs
-        let rsps = Rsps::new(
-            root_cid,
-            1,
-            &[cid1, cid2],
-            &RspsConfig::default(),
-        )
-        .unwrap();
+        let rsps = Rsps::new(root_cid, 1, &[cid1, cid2], &RspsConfig::default()).unwrap();
 
         cache.register_rsps(rsps);
 
@@ -256,13 +251,7 @@ mod tests {
         let data = vec![1, 2, 3, 4, 5];
 
         // Register RSPS
-        let rsps = Rsps::new(
-            root_cid,
-            1,
-            &[cid],
-            &RspsConfig::default(),
-        )
-        .unwrap();
+        let rsps = Rsps::new(root_cid, 1, &[cid], &RspsConfig::default()).unwrap();
         cache.register_rsps(rsps);
 
         // Admit and retrieve
@@ -285,18 +274,12 @@ mod tests {
         let cid2 = [3u8; 32];
 
         // Register RSPS
-        let rsps = Rsps::new(
-            root_cid,
-            1,
-            &[cid1, cid2],
-            &RspsConfig::default(),
-        )
-        .unwrap();
+        let rsps = Rsps::new(root_cid, 1, &[cid1, cid2], &RspsConfig::default()).unwrap();
         cache.register_rsps(rsps);
 
         // Fill cache
         assert!(cache.admit(root_cid, cid1, vec![0; 8]).unwrap());
-        
+
         // This should evict cid1
         assert!(cache.admit(root_cid, cid2, vec![0; 8]).unwrap());
 
