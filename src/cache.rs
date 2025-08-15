@@ -79,8 +79,9 @@ impl RootAnchoredCache {
             rsps_by_root: Arc::new(DashMap::new()),
             entries: Arc::new(DashMap::new()),
             lru: Arc::new(RwLock::new(LruCache::new(
-                std::num::NonZeroUsize::new(max_items.max(1))
-                    .unwrap_or_else(|| std::num::NonZeroUsize::new(1000000).expect("1000000 is non-zero")),
+                std::num::NonZeroUsize::new(max_items.max(1)).unwrap_or_else(|| {
+                    std::num::NonZeroUsize::new(1000000).expect("1000000 is non-zero")
+                }),
             ))),
             current_size: Arc::new(RwLock::new(0)),
             items_per_root: Arc::new(DashMap::new()),

@@ -94,8 +94,10 @@ impl WitnessKey {
         input.extend_from_slice(cid);
         input.extend_from_slice(&epoch.to_le_bytes());
 
-        let (out, proof) =
-            DefaultCrypto::vrf_prove(&input, &crate::crypto::types::VrfSecretKey(self.vrf_secret.0))?;
+        let (out, proof) = DefaultCrypto::vrf_prove(
+            &input,
+            &crate::crypto::types::VrfSecretKey(self.vrf_secret.0),
+        )?;
         Ok(VrfPseudonym {
             value: out.0,
             proof: proof.0,

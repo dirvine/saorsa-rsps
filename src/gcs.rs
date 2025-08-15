@@ -193,15 +193,15 @@ impl GolombCodedSet {
 
             // Prevent integer overflow in delta calculation
             let delta = q.saturating_mul(self.p).saturating_add(r);
-            
+
             // Prevent integer overflow in value calculation
             let value = prev.saturating_add(delta);
-            
+
             // Detect overflow/wraparound which indicates malformed data
             if value < prev {
                 return false; // Overflow detected
             }
-            
+
             prev = value;
             decoded_count += 1;
 
