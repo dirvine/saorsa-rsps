@@ -84,6 +84,54 @@ RSPS (Root-Scoped Provider Summaries) organize content hierarchically under root
 - **Salt**: Deterministic salt for GCS construction
 - **Metadata**: Creation timestamp and configuration
 
+## Using RSPS in a Decentralized Network
+
+This crate is designed for use in DHT-based or gossip-based networks where providers advertise summaries of content clustered under a root CID. A typical flow:
+
+1. **Producer builds RSPS**
+   - Select a `root_cid` and gather the set of child CIDs.
+   - Build an `Rsps` with an epoch representing the dataset version.
+   - Serialize or extract the `digest()` for lightweight advertisement in the DHT.
+
+2. **Advertisement**
+   - Publish either the RSPS bytes or its `digest` keyed by `root_cid`+`epoch` in your routing layer.
+   - Peers cache the announcement, possibly with TTL heuristics matching their local policy.
+
+3. **Discovery**
+   - A client looking for a `cid` first fetches the RSPS for the relevant `root_cid`/`epoch`.
+   - Use `rsps.contains(&cid)` to check probabilistic membership.
+   - On positive result, proceed to fetch the content from providers under that root.
+
+4. **Cache integration**
+   - Register an `Rsps` with `RootAnchoredCache` to gate cache admission: only items in the RSPS are eligible.
+   - Use the `TtlEngine` to manage lifetimes based on hits and witness receipts.
+
+5. **Epoch rotation**
+   - When the dataset changes, increment `epoch` and republish a new RSPS.
+   - Consumers prefer the highest known epoch and drop stale ones per policy.
+
+### False-positive tuning
+
+- `RspsConfig.target_fpr` sets the target false positive rate. This crate uses Golomb–Rice coding internally, selecting a `p = 2^k` consistent with the requested FPR.
+- Trade-offs:
+  - Lower FPR → larger RSPS, more CPU to encode/decode, less cache pollution.
+  - Higher FPR → smaller RSPS, faster, but occasional extra fetches.
+
+### Serialization and transport
+
+- `GolombCodedSet::to_bytes`/`from_bytes` serialize the GCS; an RSPS can be reconstructed from its components across nodes.
+- For transport, include: `root_cid`, `epoch`, `salt`, and `gcs.to_bytes()`.
+
+### Witness receipts (optional)
+
+- Nodes can issue witness receipts for successful retrievals under a root to extend TTLs and inform reputation systems.
+- This crate currently includes placeholder VRF/signature logic for prototyping. Do not rely on it in production.
+
+## Security Notes
+
+- The witness cryptography (VRF and signatures) is simplified and not suitable for production. Verification functions may accept invalid inputs. A future version will integrate proper, audited primitives and strict verification.
+- GCS uses Golomb–Rice coding (power-of-two parameter) to ensure decode correctness and performance.
+
 ## Performance
 
 Saorsa RSPS is optimized for:
