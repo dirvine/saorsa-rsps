@@ -91,9 +91,10 @@ impl WitnessKey {
         input.extend_from_slice(b"saorsa-rsps:vrf:v1:");
         input.extend_from_slice(cid);
         input.extend_from_slice(&epoch.to_le_bytes());
-        
-        let (out, proof) = DefaultCrypto::vrf_prove(&input, &crate::crypto::types::VrfSecretKey(self.vrf_secret))
-            .expect("VRF prove should not fail with valid key");
+
+        let (out, proof) =
+            DefaultCrypto::vrf_prove(&input, &crate::crypto::types::VrfSecretKey(self.vrf_secret))
+                .expect("VRF prove should not fail with valid key");
         VrfPseudonym {
             value: out.0,
             proof: proof.0,
@@ -147,7 +148,7 @@ impl WitnessKey {
         msg.extend_from_slice(&metadata.latency_ms.to_le_bytes());
         msg.extend_from_slice(&metadata.content_size.to_le_bytes());
         msg.push(metadata.valid as u8);
-        
+
         let sig = DefaultCrypto::sign_with_secret_bytes(&msg, self.sig_secret)
             .expect("Signature should not fail with valid key");
         sig.to_bytes().to_vec()
@@ -177,7 +178,7 @@ pub fn verify_pseudonym(
     input.extend_from_slice(b"saorsa-rsps:vrf:v1:");
     input.extend_from_slice(cid);
     input.extend_from_slice(&epoch.to_le_bytes());
-    
+
     let proof = crate::crypto::types::VrfProof(pseudonym.proof.clone());
     let pk = crate::crypto::types::VrfPublicKey(*public_key);
     match DefaultCrypto::vrf_verify(&input, &pk, &proof) {
@@ -215,7 +216,7 @@ pub fn verify_receipt(receipt: &WitnessReceipt, public_key: &[u8; 32]) -> bool {
     msg.extend_from_slice(&receipt.metadata.latency_ms.to_le_bytes());
     msg.extend_from_slice(&receipt.metadata.content_size.to_le_bytes());
     msg.push(receipt.metadata.valid as u8);
-    
+
     let sig_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
         match receipt.signature.clone().try_into() {
             Ok(b) => b,
@@ -420,11 +421,11 @@ mod tests {
 
         // Create pseudonym with domain separation
         let pseudonym = key.create_pseudonym(&cid, epoch);
-        
+
         // Verify it works
         let vrf_pk = key.vrf_public_key();
         assert!(verify_pseudonym(&pseudonym, &cid, epoch, &vrf_pk));
-        
+
         // Verify it fails with wrong epoch
         assert!(!verify_pseudonym(&pseudonym, &cid, epoch + 1, &vrf_pk));
     }
@@ -433,7 +434,7 @@ mod tests {
     fn test_invalid_signature_verification() {
         let key = WitnessKey::generate();
         let cid = [1u8; 32];
-        
+
         let metadata = ReceiptMetadata {
             latency_ms: 150,
             content_size: 1024,
@@ -442,10 +443,10 @@ mod tests {
         };
 
         let mut receipt = key.create_receipt(cid, 1, metadata);
-        
+
         // Corrupt the signature
         receipt.signature[0] ^= 1;
-        
+
         // Verification should fail
         let pk = key.public_key();
         assert!(!verify_receipt(&receipt, &pk));
@@ -471,7 +472,7 @@ mod tests {
         let key1 = WitnessKey::generate();
         let key2 = WitnessKey::generate();
         let cid = [1u8; 32];
-        
+
         let metadata = ReceiptMetadata {
             latency_ms: 150,
             content_size: 1024,
@@ -480,11 +481,11 @@ mod tests {
         };
 
         let receipt = key1.create_receipt(cid, 1, metadata);
-        
+
         // Try to verify with wrong public key
         let wrong_pk = key2.public_key();
         assert!(!verify_receipt(&receipt, &wrong_pk));
-        
+
         // Verify with correct public key works
         let correct_pk = key1.public_key();
         assert!(verify_receipt(&receipt, &correct_pk));

@@ -73,7 +73,9 @@ impl CryptoProvider for DefaultCrypto {
     }
 
     fn vrf_prove(input: &[u8], sk: &VrfSecretKey) -> Result<(VrfOutput, VrfProof), CryptoError> {
-        let sk = vrf_r255::SecretKey::from_bytes(sk.0).into_option().ok_or(CryptoError::InvalidKey)?;
+        let sk = vrf_r255::SecretKey::from_bytes(sk.0)
+            .into_option()
+            .ok_or(CryptoError::InvalidKey)?;
         let proof = sk.prove(input);
         let pk = vrf_r255::PublicKey::from(sk);
         let out_opt = pk.verify(input, &proof);
@@ -93,7 +95,8 @@ impl CryptoProvider for DefaultCrypto {
         }
         let mut proof_bytes = [0u8; 80];
         proof_bytes.copy_from_slice(&proof.0);
-        let proof = vrf_r255::Proof::from_bytes(proof_bytes).ok_or(CryptoError::InvalidSignature)?;
+        let proof =
+            vrf_r255::Proof::from_bytes(proof_bytes).ok_or(CryptoError::InvalidSignature)?;
         let out_opt = pk.verify(input, &proof);
         out_opt
             .into_option()
@@ -153,7 +156,7 @@ mod tests {
         let kp = DefaultCrypto::sig_keygen();
         let msg = b"test message";
         let sig = DefaultCrypto::sign(msg, &kp.secret).unwrap();
-        
+
         // Try to verify with wrong public key
         let wrong_kp = DefaultCrypto::sig_keygen();
         assert!(DefaultCrypto::verify(msg, &wrong_kp.public, &sig).is_err());
@@ -163,10 +166,10 @@ mod tests {
     fn vrf_deterministic() {
         let vk = DefaultCrypto::vrf_keygen();
         let input = b"deterministic-input";
-        
+
         let (out1, proof1) = DefaultCrypto::vrf_prove(input, &vk.secret).unwrap();
         let (out2, proof2) = DefaultCrypto::vrf_prove(input, &vk.secret).unwrap();
-        
+
         // Same input should produce same output and proof
         assert_eq!(out1.0, out2.0);
         assert_eq!(proof1.0, proof2.0);
@@ -175,10 +178,10 @@ mod tests {
     #[test]
     fn vrf_different_inputs_different_outputs() {
         let vk = DefaultCrypto::vrf_keygen();
-        
+
         let (out1, _) = DefaultCrypto::vrf_prove(b"input1", &vk.secret).unwrap();
         let (out2, _) = DefaultCrypto::vrf_prove(b"input2", &vk.secret).unwrap();
-        
+
         // Different inputs should produce different outputs
         assert_ne!(out1.0, out2.0);
     }
