@@ -11,6 +11,16 @@ documentation = "https://docs.rs/saorsa-rsps"
 readme = "README.md"
 keywords = ["dht", "gcs", "golomb", "rsps", "p2p"]
 categories = ["network-programming", "data-structures", "caching"]
+exclude = [
+    "target/",
+    ".git/",
+    ".github/",
+    ".claude/",
+    "*.log",
+    "*.tmp",
+    ".DS_Store",
+    "Thumbs.db"
+]
 
 [dependencies]
 # Core
