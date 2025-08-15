@@ -1,0 +1,59 @@
+[package]
+name = "saorsa-rsps"
+version = "0.1.0"
+edition = "2024"
+authors = ["Saorsa Labs Limited <saorsalabs@gmail.com>"]
+license = "AGPL-3.0"
+description = "Root-Scoped Provider Summaries using Golomb Coded Sets for P2P DHT"
+repository = "https://github.com/dirvine/saorsa-rsps-foundation"
+homepage = "https://github.com/dirvine/saorsa-rsps-foundation"
+documentation = "https://docs.rs/saorsa-rsps"
+readme = "README.md"
+keywords = ["dht", "gcs", "golomb", "rsps", "p2p"]
+categories = ["network-programming", "data-structures", "caching"]
+
+[dependencies]
+# Core
+anyhow = "1.0"
+thiserror = "1.0"
+bytes = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+
+# Hashing
+blake3 = "1.5"
+sha2 = "0.10"
+
+# Bit manipulation
+bitvec = "1.0"
+bitreader = "0.3"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+
+# Data structures
+parking_lot = "0.12"
+lru = "0.12"
+dashmap = "6.0"
+
+# Random
+rand = "0.8"
+
+[dev-dependencies]
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+pretty_assertions = "1.4"
+
+[features]
+default = []
+bench = []
